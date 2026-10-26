@@ -4,7 +4,6 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import cl.duoc.vidasalud.catalog.domain.ServiceItem;
+import cl.duoc.vidasalud.catalog.domain.SlotService;
 import cl.duoc.vidasalud.catalog.repo.ServiceItemRepository;
 
 import jakarta.validation.Valid;
@@ -28,9 +28,11 @@ import jakarta.validation.constraints.NotNull;
 public class CatalogController {
 
     private final ServiceItemRepository repository;
+    private final SlotService cupos;
 
-    public CatalogController(ServiceItemRepository repository) {
+    public CatalogController(ServiceItemRepository repository, SlotService cupos) {
         this.repository = repository;
+        this.cupos = cupos;
     }
 
     public record ServiceRequest(
@@ -66,19 +68,21 @@ public class CatalogController {
     }
 
     /**
-     * Descuenta un cupo del box. Lo invoca ms-vidasalud-appointments al
-     * confirmar una atencion (regla del caso: el cupo baja al confirmar).
+     * Descuenta un cupo del box por via HTTP. El camino habitual es asincrono
+     * (la cola q.catalogo.cupo), pero el endpoint se mantiene para operar a
+     * mano y para poder probar la regla sin broker.
+     *
+     * La regla misma vive en SlotService: aqui solo se traduce a codigos HTTP.
      */
     @PutMapping("/{id}/slots/take")
-    @Transactional
     public ServiceItem takeSlot(@PathVariable Long id) {
-        ServiceItem item = get(id);
-        if (item.getAvailableSlots() <= 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Sin cupos disponibles para la prestacion " + id);
+        try {
+            return cupos.tomarCupo(id);
+        } catch (SlotService.PrestacionNoEncontrada e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (SlotService.SinCupos e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         }
-        item.setAvailableSlots(item.getAvailableSlots() - 1);
-        return repository.save(item);
     }
 
     @DeleteMapping("/{id}")

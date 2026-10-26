@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import cl.duoc.vidasalud.catalog.domain.ServiceItem;
+import cl.duoc.vidasalud.catalog.domain.SlotService;
 import cl.duoc.vidasalud.catalog.repo.ServiceItemRepository;
 import cl.duoc.vidasalud.catalog.web.CatalogController.ServiceRequest;
 
@@ -28,11 +29,14 @@ class CatalogControllerTest {
     @Mock
     private ServiceItemRepository repository;
 
+    @Mock
+    private SlotService cupos;
+
     private CatalogController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new CatalogController(repository);
+        controller = new CatalogController(repository, cupos);
     }
 
     private ServiceItem prestacionCon(int cupos) {
@@ -46,28 +50,33 @@ class CatalogControllerTest {
     }
 
     @Test
-    @DisplayName("Tomar un cupo lo descuenta del box")
-    void descuentaUnCupo() {
-        // Regla del caso: el cupo del box disminuye al confirmar la atencion.
-        when(repository.findById(1L)).thenReturn(Optional.of(prestacionCon(10)));
-        when(repository.save(any(ServiceItem.class))).thenAnswer(i -> i.getArgument(0));
+    @DisplayName("Tomar un cupo delega en SlotService, la regla no se duplica")
+    void delegaElDescuentoDeCupo() {
+        when(cupos.tomarCupo(1L)).thenReturn(prestacionCon(9));
 
-        ServiceItem resultado = controller.takeSlot(1L);
-
-        assertThat(resultado.getAvailableSlots()).isEqualTo(9);
+        assertThat(controller.takeSlot(1L).getAvailableSlots()).isEqualTo(9);
     }
 
     @Test
-    @DisplayName("Sin cupos disponibles responde 409 y no guarda")
-    void rechazaCuandoNoQuedanCupos() {
-        when(repository.findById(1L)).thenReturn(Optional.of(prestacionCon(0)));
+    @DisplayName("Sin cupos el endpoint traduce la regla a 409")
+    void traduceSinCuposA409() {
+        when(cupos.tomarCupo(1L)).thenThrow(new SlotService.SinCupos(1L));
 
         assertThatThrownBy(() -> controller.takeSlot(1L))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(e -> ((ResponseStatusException) e).getStatusCode())
                 .isEqualTo(HttpStatus.CONFLICT);
+    }
 
-        verify(repository, never()).save(any());
+    @Test
+    @DisplayName("Una prestacion inexistente en el descuento traduce a 404")
+    void traducePrestacionNoEncontradaA404() {
+        when(cupos.tomarCupo(9L)).thenThrow(new SlotService.PrestacionNoEncontrada(9L));
+
+        assertThatThrownBy(() -> controller.takeSlot(9L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test

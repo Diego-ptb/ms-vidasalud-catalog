@@ -23,6 +23,37 @@ atención**. Si no quedan cupos responde **409 Conflict**.
 La autorización vive en el BFF: leer el catálogo lo pueden ADMIN, RECEPCIONISTA y PACIENTE
 —este último necesita ver las prestaciones para agendar—; escribir, solo ADMIN.
 
+## Mensajería
+
+El descuento de cupo llega normalmente **por cola**, no por HTTP. `ms-vidasalud-appointments`
+publica un comando `cupo.tomar` en el exchange direct `vidasalud.comandos.direct` al
+confirmar una atención, y este servicio lo consume de `q.catalogo.cupo`.
+
+La diferencia práctica frente a la llamada HTTP directa: si el catálogo está caído, la
+confirmación de la atención no falla. El mensaje espera en la cola y se procesa cuando el
+servicio vuelve.
+
+El endpoint `PUT /{id}/slots/take` se mantiene para operar a mano y para poder probar la
+regla sin broker. La regla misma vive en `SlotService`, con una sola implementación para
+las dos puertas de entrada.
+
+### ACK y errores
+
+ACK manual:
+
+| Situación | Decisión |
+|---|---|
+| Cupo descontado | `basicAck` |
+| Prestación inexistente | `basicNack` sin requeue → DLQ |
+| Sin cupos disponibles | `basicNack` sin requeue → DLQ |
+| Fallo transitorio, 1ª vez | `basicNack` con requeue |
+| Fallo transitorio, 2ª vez | `basicNack` sin requeue → DLQ |
+
+"Sin cupos" va a la DLQ y no a reintento a propósito: el cupo no va a aparecer por
+insistir, y alguien tiene que revisar esa atención a mano. Una atención confirmada sin
+cupo descontado deja el box mal contado, así que el consumidor de
+`q.catalogo.cupo.dlq` lo registra con nivel `error`.
+
 ## Persistencia
 
 Entidad `ServiceItem` → tabla `vs_service`, vía Spring Data JPA. Hibernate crea el esquema
