@@ -25,34 +25,26 @@ La autorización vive en el BFF: leer el catálogo lo pueden ADMIN, RECEPCIONIST
 
 ## Mensajería
 
-El descuento de cupo llega normalmente **por cola**, no por HTTP. `ms-vidasalud-appointments`
-publica un comando `cupo.tomar` en el exchange direct `vidasalud.comandos.direct` al
-confirmar una atención, y este servicio lo consume de `q.catalogo.cupo`.
+Este servicio **no habla AMQP**. Su `pom.xml` no incluye el starter de RabbitMQ: toda la
+mensajería vive en `ms-vidasalud-rabbit-admin`.
 
-La diferencia práctica frente a la llamada HTTP directa: si el catálogo está caído, la
-confirmación de la atención no falla. El mensaje espera en la cola y se procesa cuando el
-servicio vuelve.
+El descuento de cupo llega normalmente **por cola**. Cuando se confirma una atención,
+el servicio de mensajería consume `q.catalogo.cupo` y llama a este endpoint:
 
-El endpoint `PUT /{id}/slots/take` se mantiene para operar a mano y para poder probar la
-regla sin broker. La regla misma vive en `SlotService`, con una sola implementación para
-las dos puertas de entrada.
+```
+PUT /api/catalog/services/{id}/slots/take
+```
 
-### ACK y errores
+La diferencia práctica frente a una llamada directa entre servicios de dominio: si el
+catálogo está caído, la confirmación de la atención no falla. El mensaje espera en la
+cola y se procesa cuando el servicio vuelve.
 
-ACK manual:
+El mismo endpoint sirve para operar a mano y para probar la regla sin broker. La regla
+vive en `SlotService`, con una sola implementación para las dos puertas de entrada.
 
-| Situación | Decisión |
-|---|---|
-| Cupo descontado | `basicAck` |
-| Prestación inexistente | `basicNack` sin requeue → DLQ |
-| Sin cupos disponibles | `basicNack` sin requeue → DLQ |
-| Fallo transitorio, 1ª vez | `basicNack` con requeue |
-| Fallo transitorio, 2ª vez | `basicNack` sin requeue → DLQ |
-
-"Sin cupos" va a la DLQ y no a reintento a propósito: el cupo no va a aparecer por
-insistir, y alguien tiene que revisar esa atención a mano. Una atención confirmada sin
-cupo descontado deja el box mal contado, así que el consumidor de
-`q.catalogo.cupo.dlq` lo registra con nivel `error`.
+Los códigos importan: responde `409` sin cupos y `404` si la prestación no existe. El
+consumidor interpreta ambos como errores definitivos y manda el mensaje a la DLQ, porque
+el cupo no va a aparecer por insistir y alguien tiene que revisar esa atención a mano.
 
 ## Persistencia
 
